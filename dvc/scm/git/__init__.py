@@ -3,6 +3,7 @@
 from __future__ import unicode_literals
 
 import os
+import logging
 
 from dvc.utils.compat import str, open
 from dvc.utils import fix_env
@@ -13,7 +14,16 @@ from dvc.scm.base import (
     FileNotInTargetSubdirError,
 )
 from dvc.scm.git.tree import GitTree
-import dvc.logger as logger
+
+
+logger = logging.getLogger(__name__)
+
+
+DIFF_A_TREE = "a_tree"
+DIFF_B_TREE = "b_tree"
+DIFF_A_REF = "a_ref"
+DIFF_B_REF = "b_ref"
+DIFF_EQUAL = "equal"
 
 
 class Git(Base):
@@ -23,6 +33,9 @@ class Git(Base):
     GIT_DIR = ".git"
 
     def __init__(self, root_dir=os.curdir, repo=None):
+        """Git class constructor.
+        Requires `Repo` class from `git` module (from gitpython package).
+        """
         super(Git, self).__init__(root_dir, repo=repo)
 
         import git
@@ -154,7 +167,7 @@ class Git(Base):
                 " for more details.".format(str(paths))
             )
 
-            logger.error(msg)
+            logger.exception(msg)
 
     def commit(self, msg):
         self.git.index.commit(msg)
@@ -194,17 +207,26 @@ class Git(Base):
         return [t.name for t in self.git.tags]
 
     def _install_hook(self, name, cmd):
+        command = "dvc {}".format(cmd)
+
         hook = os.path.join(self.root_dir, self.GIT_DIR, "hooks", name)
+
         if os.path.isfile(hook):
-            msg = "git hook '{}' already exists."
-            raise SCMError(msg.format(os.path.relpath(hook)))
-        with open(hook, "w+") as fobj:
-            fobj.write("#!/bin/sh\nexec dvc {}\n".format(cmd))
+            with open(hook, "r+") as fobj:
+                if command not in fobj.read():
+                    fobj.write("exec {command}\n".format(command=command))
+        else:
+            with open(hook, "w+") as fobj:
+                fobj.write(
+                    "#!/bin/sh\n" "exec {command}\n".format(command=command)
+                )
+
         os.chmod(hook, 0o777)
 
     def install(self):
         self._install_hook("post-checkout", "checkout")
         self._install_hook("pre-commit", "status")
+        self._install_hook("pre-push", "push")
 
     def cleanup_ignores(self):
         for path in self.ignored_paths:
@@ -235,3 +257,56 @@ class Git(Base):
 
     def get_tree(self, rev):
         return GitTree(self.git, rev)
+
+    def _get_diff_trees(self, a_ref, b_ref):
+        """Private method for getting the trees and commit hashes of 2 git
+        references.
+        Requires `gitdb` module (from gitpython package).
+
+        Args:
+            a_ref(str) - git reference
+            b_ref(str) - second git reference. If None, uses HEAD
+
+        Returns:
+            tuple - tuple with elements: (trees, commits)
+        """
+        from gitdb.exc import BadObject, BadName
+
+        trees = {DIFF_A_TREE: None, DIFF_B_TREE: None}
+        commits = []
+        if b_ref is None:
+            b_ref = self.git.head.commit
+        try:
+            a_commit = self.git.git.rev_parse(a_ref, short=True)
+            b_commit = self.git.git.rev_parse(b_ref, short=True)
+            # See https://gitpython.readthedocs.io
+            # /en/2.1.11/reference.html#git.objects.base.Object.__str__
+            commits.append(a_commit)
+            commits.append(b_commit)
+            trees[DIFF_A_TREE] = self.get_tree(commits[0])
+            trees[DIFF_B_TREE] = self.get_tree(commits[1])
+        except (BadName, BadObject) as e:
+            raise SCMError("git problem", cause=e)
+        return trees, commits
+
+    def get_diff_trees(self, a_ref, b_ref=None):
+        """Method for getting two repo trees between two git tag commits.
+        Returns the dvc hash names of changed file/directory
+
+        Args:
+            a_ref(str) - git reference
+            b_ref(str) - optional second git reference, default None
+
+        Returns:
+            dict - dictionary with keys: (a_tree, b_tree, a_ref, b_ref, equal)
+        """
+        diff_dct = {DIFF_EQUAL: False}
+        trees, commits = self._get_diff_trees(a_ref, b_ref)
+        diff_dct[DIFF_A_REF] = commits[0]
+        diff_dct[DIFF_B_REF] = commits[1]
+        if commits[0] == commits[1]:
+            diff_dct[DIFF_EQUAL] = True
+            return diff_dct
+        diff_dct[DIFF_A_TREE] = trees[DIFF_A_TREE]
+        diff_dct[DIFF_B_TREE] = trees[DIFF_B_TREE]
+        return diff_dct

@@ -1,29 +1,30 @@
 from __future__ import unicode_literals
 
 import argparse
+import logging
 
-import dvc.logger as logger
 from dvc.exceptions import DvcException
 from dvc.command.base import CmdBase, fix_subparsers, append_doc_link
-from dvc.repo.pkg import PackageParams
 
 
-class CmdPkg(CmdBase):
-    def run(self, unlock=False):
+logger = logging.getLogger(__name__)
+
+
+class CmdPkgInstall(CmdBase):
+    def run(self):
         try:
-            pkg_params = PackageParams(
+            self.repo.pkg.install(
                 self.args.address,
                 self.args.target_dir,
                 self.args.select,
                 self.args.file,
             )
-            return self.repo.install_pkg(pkg_params)
+            return 0
         except DvcException:
-            logger.error(
+            logger.exception(
                 "failed to install package '{}'".format(self.args.address)
             )
             return 1
-        pass
 
 
 def add_parser(subparsers, parent_parser):
@@ -34,7 +35,6 @@ def add_parser(subparsers, parent_parser):
         "pkg",
         parents=[parent_parser],
         description=append_doc_link(PKG_HELP, "pkg"),
-        help=PKG_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=False,
     )
@@ -86,4 +86,4 @@ def add_parser(subparsers, parent_parser):
         "By default the file has 'mod_' prefix and imported package name "
         "followed by .dvc",
     )
-    pkg_install_parser.set_defaults(func=CmdPkg)
+    pkg_install_parser.set_defaults(func=CmdPkgInstall)

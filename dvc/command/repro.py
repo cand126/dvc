@@ -2,12 +2,15 @@ from __future__ import unicode_literals
 
 import argparse
 import os
+import logging
 
-import dvc.logger as logger
 from dvc.command.base import CmdBase, append_doc_link
 from dvc.command.metrics import show_metrics
 from dvc.command.status import CmdDataStatus
 from dvc.exceptions import DvcException
+
+
+logger = logging.getLogger(__name__)
 
 
 class CmdRepro(CmdBase):
@@ -36,6 +39,7 @@ class CmdRepro(CmdBase):
                     all_pipelines=self.args.all_pipelines,
                     ignore_build_cache=self.args.ignore_build_cache,
                     no_commit=self.args.no_commit,
+                    downstream=self.args.downstream,
                 )
 
                 if len(stages) == 0:
@@ -45,7 +49,7 @@ class CmdRepro(CmdBase):
                     metrics = self.repo.metrics.show()
                     show_metrics(metrics)
             except DvcException:
-                logger.error()
+                logger.exception("")
                 ret = 1
                 break
 
@@ -136,5 +140,11 @@ def add_parser(subparsers, parent_parser):
         action="store_true",
         default=False,
         help="Don't put files/directories into cache.",
+    )
+    repro_parser.add_argument(
+        "--downstream",
+        action="store_true",
+        default=False,
+        help="Reproduce the pipeline starting from the specified stage.",
     )
     repro_parser.set_defaults(func=CmdRepro)

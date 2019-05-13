@@ -7,9 +7,12 @@ from dvc.utils.compat import str
 import os
 import json
 import errno
+import logging
 
-import dvc.logger as logger
-from dvc import VERSION
+from dvc import __version__
+
+
+logger = logging.getLogger(__name__)
 
 
 class Analytics(object):
@@ -93,10 +96,11 @@ class Analytics(object):
         with open(self.user_id_file, "r") as fobj:
             try:
                 info = json.load(fobj)
-                return info[self.PARAM_USER_ID]
-            except json.JSONDecodeError as exc:
+            except ValueError as exc:
                 logger.debug("Failed to load user_id: {}".format(exc))
                 return None
+
+            return info[self.PARAM_USER_ID]
 
     def _get_user_id(self):
         from dvc.lock import LockError
@@ -164,7 +168,7 @@ class Analytics(object):
         from dvc.repo import Repo
         from dvc.exceptions import NotDvcRepoError
 
-        self.info[self.PARAM_DVC_VERSION] = VERSION
+        self.info[self.PARAM_DVC_VERSION] = __version__
         self.info[self.PARAM_IS_BINARY] = is_binary()
         self.info[self.PARAM_USER_ID] = self._get_user_id()
 

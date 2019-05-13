@@ -214,11 +214,12 @@ class NoMetricsError(DvcException):
 
 
 class StageFileCorruptedError(DvcException):
-    def __init__(self, path):
+    def __init__(self, path, cause=None):
         path = os.path.relpath(path)
         super(StageFileCorruptedError, self).__init__(
             "unable to read stage file: {} "
-            "YAML file structure is corrupted".format(path)
+            "YAML file structure is corrupted".format(path),
+            cause=cause,
         )
 
 
@@ -247,4 +248,19 @@ class TargetNotDirectoryError(DvcException):
     def __init__(self, path):
         super(TargetNotDirectoryError, self).__init__(
             "Target: {} is not a directory".format(path)
+        )
+
+
+class CheckoutErrorSuggestGit(DvcException):
+    def __init__(self, target, cause):
+        super(CheckoutErrorSuggestGit, self).__init__(
+            "Did you mean 'git checkout {}'?".format(target), cause=cause
+        )
+
+
+class ETagMismatchError(DvcException):
+    def __init__(self, etag, cached_etag):
+        super(ETagMismatchError, self).__init__(
+            "ETag mismatch detected when copying file to cache! "
+            "(expected: '{}', actual: '{}')".format(etag, cached_etag)
         )

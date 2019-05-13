@@ -1,16 +1,16 @@
 from __future__ import unicode_literals
 
 import argparse
+import logging
 
-import dvc.logger as logger
-from dvc.command.base import append_doc_link
+from dvc.command.base import CmdBaseNoRepo, append_doc_link
 
 
-class CmdInit(object):
-    def __init__(self, args):
-        self.args = args
+logger = logging.getLogger(__name__)
 
-    def run_cmd(self):
+
+class CmdInit(CmdBaseNoRepo):
+    def run(self):
         from dvc.repo import Repo
         from dvc.exceptions import InitError
 
@@ -20,7 +20,7 @@ class CmdInit(object):
             )
             self.config = self.repo.config
         except InitError:
-            logger.error("failed to initiate dvc")
+            logger.exception("failed to initiate dvc")
             return 1
         return 0
 

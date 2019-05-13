@@ -2,17 +2,18 @@ from __future__ import unicode_literals
 
 import argparse
 import os
+import logging
 
-import dvc.logger as logger
-from dvc.command.base import CmdBase, append_doc_link
+from dvc.repo import Repo
+from dvc.command.base import CmdBaseNoRepo, append_doc_link
 
 
-class CmdRoot(CmdBase):
-    def run_cmd(self):
-        return self.run()
+logger = logging.getLogger(__name__)
 
+
+class CmdRoot(CmdBaseNoRepo):
     def run(self):
-        logger.info(os.path.relpath(self.repo.root_dir))
+        logger.info(os.path.relpath(Repo.find_root()))
         return 0
 
 

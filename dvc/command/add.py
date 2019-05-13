@@ -1,10 +1,13 @@
 from __future__ import unicode_literals
 
 import argparse
+import logging
 
-import dvc.logger as logger
 from dvc.exceptions import DvcException
 from dvc.command.base import CmdBase, append_doc_link
+
+
+logger = logging.getLogger(__name__)
 
 
 class CmdAdd(CmdBase):
@@ -22,7 +25,7 @@ class CmdAdd(CmdBase):
                 )
 
         except DvcException:
-            logger.error("failed to add file")
+            logger.exception("failed to add file")
             return 1
         return 0
 
@@ -51,14 +54,7 @@ def add_parser(subparsers, parent_parser):
         help="Don't put files/directories into cache.",
     )
     add_parser.add_argument(
-        "-f",
-        "--file",
-        help="Specify name of the stage file. It should be "
-        "either 'Dvcfile' or have a '.dvc' suffix (e.g. "
-        "'prepare.dvc', 'clean.dvc', etc) in order for "
-        "dvc to be able to find it later. By default "
-        "the output basename + .dvc is used as a stage filename. "
-        "(NOTE: It can't be used when specifying multiple targets)",
+        "-f", "--file", help="Specify name of the DVC file it generates."
     )
     add_parser.add_argument(
         "targets", nargs="+", help="Input files/directories."

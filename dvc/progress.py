@@ -33,11 +33,11 @@ class Progress(object):
         return self._n_total == self._n_finished
 
     def clearln(self):
-        self.print(CLEARLINE_PATTERN, end="")
+        self._print(CLEARLINE_PATTERN, end="")
 
     def _writeln(self, line):
         self.clearln()
-        self.print(line, end="")
+        self._print(line, end="")
         sys.stdout.flush()
 
     def reset(self):
@@ -74,7 +74,7 @@ class Progress(object):
             if sys.stdout.isatty():
                 self.clearln()
 
-            self.print(pbar)
+            self._print(pbar)
 
             self._n_finished += 1
             self._line = None
@@ -106,10 +106,12 @@ class Progress(object):
         return num + pbar + percent + target_name
 
     @staticmethod
-    def print(*args, **kwargs):
-        import dvc.logger as logger
+    def _print(*args, **kwargs):
+        import logging
 
-        if logger.is_quiet():
+        logger = logging.getLogger(__name__)
+
+        if logger.getEffectiveLevel() == "CRITICAL":
             return
 
         print(*args, **kwargs)
@@ -124,26 +126,22 @@ class Progress(object):
             self.refresh()
         self._lock.release()
 
+    def __call__(self, seq, name="", total=None):
+        if total is None:
+            total = len(seq)
 
-def progress_aware(f):
-    """ Decorator to add a new line if progress bar hasn't finished  """
-    from functools import wraps
-
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        if not progress.is_finished:
-            progress.print()
-        progress.clearln()
-
-        return f(*args, **kwargs)
-
-    return wrapper
+        self.update_target(name, 0, total)
+        for done, item in enumerate(seq, start=1):
+            yield item
+            self.update_target(name, done, total)
+        self.finish_target(name)
 
 
 class ProgressCallback(object):
     def __init__(self, total):
         self.total = total
         self.current = 0
+        progress.reset()
 
     def update(self, name, progress_to_add=1):
         self.current += progress_to_add

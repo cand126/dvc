@@ -1,20 +1,26 @@
 from __future__ import unicode_literals
 
-from dvc.utils.compat import str, open
+from dvc.utils.compat import str
 
+import copy
+import re
 import os
-import yaml
 import subprocess
+import logging
 
 from dvc.utils.fs import contains_symlink_up_to
 from schema import Schema, SchemaError, Optional, Or, And
 
 import dvc.prompt as prompt
-import dvc.logger as logger
 import dvc.dependency as dependency
 import dvc.output as output
 from dvc.exceptions import DvcException
-from dvc.utils import dict_md5, fix_env, load_stage_file_fobj
+from dvc.utils import dict_md5, fix_env
+from dvc.utils.collections import apply_diff
+from dvc.utils.stage import load_stage_fd, dump_stage_file
+
+
+logger = logging.getLogger(__name__)
 
 
 class StageCmdFailedError(DvcException):
@@ -119,6 +125,7 @@ class Stage(object):
     PARAM_DEPS = "deps"
     PARAM_OUTS = "outs"
     PARAM_LOCKED = "locked"
+    PARAM_META = "meta"
 
     SCHEMA = {
         Optional(PARAM_MD5): Or(str, None),
@@ -127,7 +134,10 @@ class Stage(object):
         Optional(PARAM_DEPS): Or(And(list, Schema([dependency.SCHEMA])), None),
         Optional(PARAM_OUTS): Or(And(list, Schema([output.SCHEMA])), None),
         Optional(PARAM_LOCKED): bool,
+        Optional(PARAM_META): object,
     }
+
+    TAG_REGEX = r"^(?P<path>.*)@(?P<tag>[^\\/@:]*)$"
 
     def __init__(
         self,
@@ -139,6 +149,8 @@ class Stage(object):
         outs=None,
         md5=None,
         locked=False,
+        tag=None,
+        state=None,
     ):
         if deps is None:
             deps = []
@@ -153,6 +165,8 @@ class Stage(object):
         self.deps = deps
         self.md5 = md5
         self.locked = locked
+        self.tag = tag
+        self._state = state or {}
 
     def __repr__(self):
         return "Stage: '{path}'".format(
@@ -249,13 +263,9 @@ class Stage(object):
         )
 
         if ret:
-            msg = "Stage '{}' changed.".format(self.relpath)
-            color = "yellow"
+            logger.warning("Stage '{}' changed.".format(self.relpath))
         else:
-            msg = "Stage '{}' didn't change.".format(self.relpath)
-            color = "green"
-
-        logger.info(logger.colorize(msg, color))
+            logger.info("Stage '{}' didn't change.".format(self.relpath))
 
         return ret
 
@@ -334,7 +344,7 @@ class Stage(object):
     def _expand_to_path_on_add_local(add, fname, out, path_handler):
         if (
             add
-            and out.is_local
+            and out.is_in_repo
             and not contains_symlink_up_to(out.path, out.repo.root_dir)
         ):
             fname = path_handler.join(path_handler.dirname(out.path), fname)
@@ -384,7 +394,21 @@ class Stage(object):
             out.pop(RemoteLOCAL.PARAM_CHECKSUM, None)
             out.pop(RemoteS3.PARAM_CHECKSUM, None)
 
-        return old_d == new_d
+        if old_d != new_d:
+            return False
+
+        # NOTE: committing to prevent potential data duplication. For example
+        #
+        #    $ dvc config cache.type hardlink
+        #    $ echo foo > foo
+        #    $ dvc add foo
+        #    $ rm -f foo
+        #    $ echo foo > foo
+        #    $ dvc add foo # should replace foo with a link to cache
+        #
+        old.commit()
+
+        return True
 
     @staticmethod
     def create(
@@ -467,11 +491,20 @@ class Stage(object):
 
         # NOTE: remove outs before we check build cache
         if remove_outs:
+            logger.warning(
+                "--remove-outs is deprecated."
+                " It is now the default behavior,"
+                " so there's no need to use this option anymore."
+            )
             stage.remove_outs(ignore_remove=False)
             logger.warning("Build cache is ignored when using --remove-outs.")
             ignore_build_cache = True
         else:
             stage.unprotect_outs()
+
+        if os.path.exists(path) and any(out.persist for out in stage.outs):
+            logger.warning("Build cache is ignored when persisting outputs.")
+            ignore_build_cache = True
 
         if validate_state:
             if os.path.exists(path):
@@ -536,8 +569,17 @@ class Stage(object):
         if not repo.tree.isfile(fname):
             raise StageFileIsNotDvcFileError(fname)
 
+    @classmethod
+    def _get_path_tag(cls, s):
+        regex = re.compile(cls.TAG_REGEX)
+        match = regex.match(s)
+        if not match:
+            return s, None
+        return match.group("path"), match.group("tag")
+
     @staticmethod
     def load(repo, fname):
+        fname, tag = Stage._get_path_tag(fname)
 
         # it raises the proper exceptions by priority:
         # 1. when the file doesn't exists
@@ -547,7 +589,11 @@ class Stage(object):
         Stage._check_dvc_filename(fname)
         Stage._check_isfile(repo, fname)
 
-        d = load_stage_file_fobj(repo.tree.open(fname), fname)
+        with repo.tree.open(fname) as fd:
+            d = load_stage_fd(fd, fname)
+        # Making a deepcopy since the original structure
+        # looses keys in deps and outs load
+        state = copy.deepcopy(d)
 
         Stage.validate(d, fname=os.path.relpath(fname))
         path = os.path.abspath(fname)
@@ -563,6 +609,8 @@ class Stage(object):
             cmd=d.get(Stage.PARAM_CMD),
             md5=d.get(Stage.PARAM_MD5),
             locked=d.get(Stage.PARAM_LOCKED, False),
+            tag=tag,
+            state=state,
         )
 
         stage.deps = dependency.loadd_from(stage, d.get(Stage.PARAM_DEPS, []))
@@ -571,19 +619,20 @@ class Stage(object):
         return stage
 
     def dumpd(self):
-        from dvc.remote.local import RemoteLOCAL
+        from dvc.remote.base import RemoteBASE
 
         return {
             key: value
             for key, value in {
                 Stage.PARAM_MD5: self.md5,
                 Stage.PARAM_CMD: self.cmd,
-                Stage.PARAM_WDIR: RemoteLOCAL.unixpath(
+                Stage.PARAM_WDIR: RemoteBASE.to_posixpath(
                     os.path.relpath(self.wdir, os.path.dirname(self.path))
                 ),
                 Stage.PARAM_LOCKED: self.locked,
                 Stage.PARAM_DEPS: [d.dumpd() for d in self.deps],
                 Stage.PARAM_OUTS: [o.dumpd() for o in self.outs],
+                Stage.PARAM_META: self._state.get("meta"),
             }.items()
             if value
         }
@@ -599,14 +648,13 @@ class Stage(object):
             )
         )
         d = self.dumpd()
-
-        with open(fname, "w") as fd:
-            yaml.safe_dump(d, fd, default_flow_style=False)
+        apply_diff(d, self._state)
+        dump_stage_file(fname, self._state)
 
         self.repo.scm.track_file(os.path.relpath(fname))
 
     def _compute_md5(self):
-        from dvc.output.local import OutputLOCAL
+        from dvc.output.base import OutputBase
 
         d = self.dumpd()
 
@@ -624,7 +672,15 @@ class Stage(object):
         # NOTE: excluding parameters that don't affect the state of the
         # pipeline. Not excluding `OutputLOCAL.PARAM_CACHE`, because if
         # it has changed, we might not have that output in our cache.
-        m = dict_md5(d, exclude=[self.PARAM_LOCKED, OutputLOCAL.PARAM_METRIC])
+        m = dict_md5(
+            d,
+            exclude=[
+                self.PARAM_LOCKED,
+                OutputBase.PARAM_METRIC,
+                OutputBase.PARAM_TAGS,
+                OutputBase.PARAM_PERSIST,
+            ],
+        )
         logger.debug("Computed stage '{}' md5: '{}'".format(self.relpath, m))
         return m
 
@@ -791,7 +847,9 @@ class Stage(object):
 
     def checkout(self, force=False, progress_callback=None):
         for out in self.outs:
-            out.checkout(force=force, progress_callback=progress_callback)
+            out.checkout(
+                force=force, tag=self.tag, progress_callback=progress_callback
+            )
 
     @staticmethod
     def _status(entries):

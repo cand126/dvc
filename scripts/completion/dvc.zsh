@@ -88,7 +88,6 @@ _dvc_run=(
   "--no-exec[Only create stage file without actually running it.]"
   "--overwrite-dvcfile[Overwrite existing dvc file without asking for confirmation.]"
   "--ignore-build-cache[Run this stage even if it has been already ran with the same command/dependencies/outputs/etc before.]"
-  "--remove-outs[Remove outputs before running the command.]"
   "--no-commit[Don't put files/directories into cache.]"
   {-f,--file}"[Specify name of the stage file.]:File:_files"
   {-c,--cwd}"[Deprecated, use -w and -f instead.]:CWD:_files -/"
@@ -158,6 +157,7 @@ _dvc_repro=(
   {-i,--interactive}"[Ask for confirmation before reproducing each stage.]"
   {-p,--pipeline}"[Reproduce the whole pipeline that the specified stage file belongs to.]"
   {-P,--all-pipelines}"[Reproduce all pipelines in the project.]"
+  {-d,--downstream}"[Reproduce the pipeline starting from the specified stage.]"
 )
 
 _dvc_remove=(

@@ -2,11 +2,14 @@ from __future__ import unicode_literals
 
 import argparse
 import os
+import logging
 
-import dvc.logger as logger
 from dvc.utils.compat import urlparse
 from dvc.exceptions import DvcException
 from dvc.command.base import CmdBase, append_doc_link
+
+
+logger = logging.getLogger(__name__)
 
 
 class CmdImport(CmdBase):
@@ -16,9 +19,11 @@ class CmdImport(CmdBase):
 
             out = self.args.out or default_out
 
-            self.repo.imp(self.args.url, out, self.args.resume)
+            self.repo.imp(
+                self.args.url, out, self.args.resume, fname=self.args.file
+            )
         except DvcException:
-            logger.error(
+            logger.exception(
                 "failed to import {}. You could also try downloading "
                 "it manually and adding it with `dvc add` command.".format(
                     self.args.url
@@ -58,5 +63,8 @@ def add_parser(subparsers, parent_parser):
     )
     import_parser.add_argument(
         "out", nargs="?", help="Destination path to put files to."
+    )
+    import_parser.add_argument(
+        "-f", "--file", help="Specify name of the DVC file it generates."
     )
     import_parser.set_defaults(func=CmdImport)
